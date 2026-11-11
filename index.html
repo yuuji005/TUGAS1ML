@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulasi Random Forest: Kelayakan Pinjaman</title>
+<style>
+:root{--bg:#f5f7fa;--card:#fff;--ink:#17212b;--mute:#5d6b7a;--line:#d5dce4;--acc:#0e6b8c;--ya:#23764a;--tidak:#b03a2e;--yab:#e3f3ea;--tdb:#f8e6e3}
+@media (prefers-color-scheme:dark){:root{--bg:#10161d;--card:#18212b;--ink:#e6ecf2;--mute:#9aa8b6;--line:#2d3a47;--acc:#5bbbdc;--ya:#59c28a;--tidak:#ee8b80;--yab:#173626;--tdb:#43211d}}
+*{box-sizing:border-box}
+html{font-family:"Source Sans 3","Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--ink);line-height:1.55}
+body{margin:0;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+main{max-width:980px;margin:0 auto;padding:28px 16px 60px}
+h1{font-size:2rem;line-height:1.15;margin:0 0 6px;letter-spacing:-.01em}
+h2{font-size:1.25rem;margin:34px 0 10px}
+h3{font-size:1.02rem;margin:18px 0 6px}
+p.lead{color:var(--mute);margin:0 0 6px;max-width:68ch}
+section,details.tree{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:12px 0}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{border:1px solid var(--line);padding:5px 9px;text-align:left;white-space:nowrap}
+th{background:color-mix(in srgb,var(--acc) 12%,var(--card))}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+tr.attr td{font-weight:600;background:color-mix(in srgb,var(--acc) 7%,var(--card))}
+.Ya{color:var(--ya);font-weight:600}.Tidak{color:var(--tidak);font-weight:600}
+.controls{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+label{display:flex;flex-direction:column;font-size:.85rem;color:var(--mute);gap:3px}
+input,select,button{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
+button{background:var(--acc);color:#fff;border-color:var(--acc);cursor:pointer;font-weight:600}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+summary{cursor:pointer;font-weight:700;font-size:1.05rem}
+.node{border-left:3px solid var(--acc);padding-left:12px;margin:14px 0}
+.node small{color:var(--mute)}
+.best{font-weight:600;color:var(--acc)}
+ul.t,ul.t ul{list-style:none;margin:0;padding-left:22px;border-left:1px dashed var(--line)}
+ul.t{border:0;padding:0}
+ul.t li{margin:4px 0}
+.edge{color:var(--mute)}
+.leaf{padding:1px 9px;border-radius:5px;font-weight:700}
+.leaf.Ya{background:var(--yab)}.leaf.Tidak{background:var(--tdb)}
+.vote{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+.vote div{border:1px solid var(--line);border-radius:6px;padding:8px 12px;min-width:150px}
+.final{font-size:1.3rem;font-weight:700;margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+<h1>Simulasi Random Forest</h1>
+<p class="lead">Studi kasus kelayakan pemberian pinjaman. Setiap langkah dihitung seperti perhitungan manual: bootstrap sampling, entropy, gain, split info, gain ratio, pohon keputusan, lalu mayoritas vote.</p>
+
+<h2>1. Data pengajuan pinjaman</h2>
+<section><div class="scroll"><table id="dataTbl"></table></div></section>
+
+<h2>2. Pengaturan hutan</h2>
+<section>
+<div class="controls">
+<label>Jumlah pohon<input id="nTree" type="number" min="1" max="9" value="3"></label>
+<label>Atribut acak per node (m)<input id="mAttr" type="number" min="1" max="4" value="2"></label>
+<label>Seed acak<input id="seed" type="number" value="7"></label>
+<button id="run">Bangun hutan</button>
+<button id="rnd" type="button">Seed acak baru</button>
+</div>
+</section>
+
+<h2>3. Pohon keputusan</h2>
+<div id="forest"></div>
+
+<h2>4. Prediksi data baru</h2>
+<section>
+<div class="controls" id="form"></div>
+<div id="result" aria-live="polite"></div>
+</section>
+</main>
+
+<script>
+const ATTRS=["Penghasilan","Status Kerja","Riwayat Kredit","Tanggungan"];
+const OPTS=[["Tinggi","Sedang","Rendah"],["Tetap","Kontrak"],["Baik","Buruk"],["Sedikit","Banyak"]];
+const RAW=[
+["Tinggi","Tetap","Baik","Sedikit","Ya"],["Tinggi","Tetap","Buruk","Banyak","Tidak"],
+["Tinggi","Kontrak","Baik","Sedikit","Ya"],["Sedang","Tetap","Baik","Banyak","Ya"],
+["Sedang","Kontrak","Buruk","Sedikit","Tidak"],["Sedang","Tetap","Buruk","Sedikit","Ya"],
+["Sedang","Kontrak","Baik","Banyak","Ya"],["Rendah","Kontrak","Buruk","Banyak","Tidak"],
+["Rendah","Tetap","Baik","Sedikit","Ya"],["Rendah","Kontrak","Baik","Banyak","Tidak"],
+["Tinggi","Kontrak","Buruk","Sedikit","Ya"],["Rendah","Tetap","Buruk","Banyak","Tidak"],
+["Sedang","Tetap","Baik","Sedikit","Ya"],["Tinggi","Kontrak","Baik","Banyak","Ya"]];
+const DATA=RAW.map((r,i)=>({no:i+1,v:r.slice(0,4),y:r[4]}));
+const $=id=>document.getElementById(id);
+const f=x=>x.toFixed(5).replace(".",",");
+const cls=y=>`<span class="${y}">${y}</span>`;
+
+function rngFn(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const cnt=rows=>{let t=0,y=0;rows.forEach(r=>r.y==="Ya"?y++:t++);return{t,y}};
+const ent=rows=>{const{t,y}=cnt(rows),n=rows.length;let e=0;[t,y].forEach(c=>{if(c)e-=c/n*Math.log2(c/n)});return e};
+function stats(rows,a){
+  const n=rows.length,e0=ent(rows);let gain=e0,si=0;const det=[];
+  OPTS[a].forEach(v=>{
+    const s=rows.filter(r=>r.v[a]===v);if(!s.length)return;
+    const w=s.length/n,c=cnt(s),e=ent(s);
+    gain-=w*e;si-=w*Math.log2(w);det.push({v,n:s.length,t:c.t,y:c.y,e,s:-w*Math.log2(w)});
+  });
+  return{a,gain:Math.max(gain,0),si,gr:si>0?Math.max(gain,0)/si:0,det};
+}
+function shuffle(arr,rnd){const a=arr.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+
+function build(rows,avail,m,rnd,log,path){
+  const c=cnt(rows),maj=c.y>=c.t?"Ya":"Tidak";
+  if(c.t===0||c.y===0||!avail.length)return{leaf:maj,n:rows.length,maj};
+  const cand=shuffle(avail,rnd).slice(0,Math.min(m,avail.length));
+  const st=cand.map(a=>stats(rows,a)).filter(s=>s.si>0);
+  if(!st.length)return{leaf:maj,n:rows.length,maj};
+  const best=st.reduce((p,q)=>q.gr>p.gr?q:p);
+  log.push({path,n:rows.length,c,e:ent(rows),st,best:best.a});
+  const kids={};
+  best.det.forEach(d=>{
+    kids[d.v]=build(rows.filter(r=>r.v[best.a]===d.v),avail.filter(x=>x!==best.a),m,rnd,log,`${path} › ${ATTRS[best.a]}=${d.v}`);
+  });
+  return{attr:best.a,kids,maj,n:rows.length};
+}
+function predict(node,x){
+  const path=[];
+  while(!node.leaf){
+    const v=x[node.attr];path.push(`${ATTRS[node.attr]}=${v}`);
+    if(!node.kids[v])return{y:node.maj,path:path.concat("(nilai tidak ada, pakai mayoritas node)")};
+    node=node.kids[v];
+  }
+  return{y:node.leaf,path};
+}
+function treeHtml(node,edge){
+  const lab=edge?`<span class="edge">${edge} →</span> `:"";
+  if(node.leaf)return`<li>${lab}<span class="leaf ${node.leaf}">${node.leaf}</span> <small>(${node.n} data)</small></li>`;
+  const kids=Object.keys(node.kids).map(k=>treeHtml(node.kids[k],k)).join("");
+  return`<li>${lab}<b>${ATTRS[node.attr]}</b><ul>${kids}</ul></li>`;
+}
+function statTable(L){
+  let h=`<div class="scroll"><table><tr><th>Atribut</th><th>Nilai</th><th>Jumlah</th><th>Tidak</th><th>Ya</th><th>Entropy</th><th>Gain</th><th>Split Info</th><th>Gain Ratio</th></tr>`;
+  h+=`<tr><td><b>Total</b></td><td></td><td class="n">${L.n}</td><td class="n">${L.c.t}</td><td class="n">${L.c.y}</td><td class="n">${f(L.e)}</td><td></td><td></td><td></td></tr>`;
+  L.st.forEach(s=>{
+    h+=`<tr class="attr"><td>${ATTRS[s.a]}</td><td></td><td></td><td></td><td></td><td></td><td class="n">${f(s.gain)}</td><td class="n">${f(s.si)}</td><td class="n">${f(s.gr)}</td></tr>`;
+    s.det.forEach(d=>{h+=`<tr><td></td><td>${d.v}</td><td class="n">${d.n}</td><td class="n">${d.t}</td><td class="n">${d.y}</td><td class="n">${f(d.e)}</td><td></td><td class="n">${f(d.s)}</td><td></td></tr>`});
+  });
+  return h+"</table></div>";
+}
+
+let FOREST=[];
+function run(){
+  const nT=+$("nTree").value,m=+$("mAttr").value,rnd=rngFn(+$("seed").value);
+  FOREST=[];let html="";
+  for(let t=0;t<nT;t++){
+    const idx=Array.from({length:DATA.length},()=>Math.floor(rnd()*DATA.length));
+    const sample=idx.map(i=>DATA[i]),log=[];
+    const root=build(sample,[0,1,2,3],m,rnd,log,"Root");
+    FOREST.push(root);
+    let h=`<details class="tree"${t===0?" open":""}><summary>Pohon ${t+1}</summary>`;
+    h+=`<h3>Hasil bootstrap sampling (${sample.length} data, dengan pengembalian)</h3><div class="scroll"><table><tr><th>No asal</th>${ATTRS.map(a=>`<th>${a}</th>`).join("")}<th>Disetujui</th></tr>`;
+    sample.forEach(r=>{h+=`<tr><td class="n">${r.no}</td>${r.v.map(v=>`<td>${v}</td>`).join("")}<td>${cls(r.y)}</td></tr>`});
+    h+=`</table></div><h3>Perhitungan tiap node</h3>`;
+    log.forEach(L=>{
+      h+=`<div class="node"><b>${L.path}</b> <small>— atribut acak: ${L.st.map(s=>ATTRS[s.a]).join(", ")}</small>${statTable(L)}<p>Gain ratio tertinggi: <span class="best">${ATTRS[L.best]}</span></p></div>`;
+    });
+    h+=`<h3>Pohon keputusan</h3><ul class="t">${treeHtml(root,"")}</ul></details>`;
+    html+=h;
+  }
+  $("forest").innerHTML=html;
+  doPredict();
+}
+function doPredict(){
+  if(!FOREST.length)return;
+  const x=ATTRS.map((_,i)=>$("f"+i).value);
+  let ya=0,td=0,h=`<div class="vote">`;
+  FOREST.forEach((t,i)=>{
+    const p=predict(t,x);p.y==="Ya"?ya++:td++;
+    h+=`<div><b>Pohon ${i+1}</b>: ${cls(p.y)}<br><small>${p.path.join(" › ")||"daun langsung"}</small></div>`;
+  });
+  const fin=ya>=td?"Ya":"Tidak";
+  h+=`</div><div>Suara Ya: <b>${ya}</b>, Tidak: <b>${td}</b></div><div class="final">Prediksi: pinjaman ${fin==="Ya"?"disetujui":"tidak disetujui"} (${cls(fin)})</div>`;
+  $("result").innerHTML=h;
+}
+
+$("dataTbl").innerHTML=`<tr><th>No</th>${ATTRS.map(a=>`<th>${a}</th>`).join("")}<th>Disetujui</th></tr>`+
+  DATA.map(r=>`<tr><td class="n">${r.no}</td>${r.v.map(v=>`<td>${v}</td>`).join("")}<td>${cls(r.y)}</td></tr>`).join("");
+const defaults=["Sedang","Tetap","Baik","Banyak"];
+$("form").innerHTML=ATTRS.map((a,i)=>`<label>${a}<select id="f${i}">${OPTS[i].map(o=>`<option${o===defaults[i]?" selected":""}>${o}</option>`).join("")}</select></label>`).join("")+`<button id="pred" type="button">Prediksi</button>`;
+$("run").onclick=run;
+$("rnd").onclick=()=>{$("seed").value=Math.floor(Math.random()*9999);run()};
+$("pred").onclick=doPredict;
+ATTRS.forEach((_,i)=>$("f"+i).onchange=doPredict);
+run();
+</script>
+</body>
+</html>
